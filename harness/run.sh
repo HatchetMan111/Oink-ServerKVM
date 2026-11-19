@@ -101,6 +101,18 @@ ln -sf "$MK/mock-pveam" "$HOSTBIN/pveam"
 ln -sf "$MK/mock-curl"  "$HOSTBIN/curl"
 ln -sf "$MK/mock-sleep" "$HOSTBIN/sleep"
 ln -sf "$MK/mock-sleep" "$INNERBIN/sleep"
+# uname-Mock (HOST-Seite): Host-Arch per Hebel $HS/host_arch umschaltbar
+# (x86_64 = Default) – arm64-Host-Szenario ProxSmartHome testbar.
+cat > "$MK/mock-uname" <<'EOF'
+#!/usr/bin/env bash
+set -u
+HS="${HARNESS_STATE:?}"
+ARCH="x86_64"
+[[ -f "$HS/host_arch" ]] && ARCH=$(/bin/cat "$HS/host_arch")
+echo "$ARCH"
+exit 0
+EOF
+ln -sf "$MK/mock-uname" "$HOSTBIN/uname"
 
 # ── Inner-Fakebin: nacktes Debian simulieren (KEIN curl, KEINE pdm-Pakete) ──
 # PATH im Inner ist AUSSCHLIESSLICH $INNERBIN (kein /usr/bin!) – sonst würde
@@ -162,9 +174,16 @@ case "$cmd" in
             if [[ "$prev" == "--hostname" ]]; then hostname="$a"; fi
             prev="$a"
         done
-        echo "$id running $hostname" >> "$HS/ct_list"
-        echo "running" > "$HS/ct_${id}.status"
         echo "$hostname" > "$HS/ct_${id}.hostname"
+        if [[ -f "$HS/spawn_fail" ]]; then
+            # Exit-0-Täuschung (Live-Fund CT 212): create "erfolgreich",
+            # Spawn knallt aber → CT bleibt gestoppt, pct create meldet Exit 0
+            echo "$id stopped $hostname" >> "$HS/ct_list"
+            echo "stopped" > "$HS/ct_${id}.status"
+        else
+            echo "$id running $hostname" >> "$HS/ct_list"
+            echo "running" > "$HS/ct_${id}.status"
+        fi
         exit 0 ;;
     start)
         [[ -f "$HS/ct_${id}.status" ]] || { echo "mock: CT $id unbekannt" >&2; exit 2; }
@@ -247,23 +266,29 @@ cat > "$MK/mock-pveam" <<'EOF'
 set -u
 HS="${HARNESS_STATE:?}"
 echo "pveam $*" >> "$HS/calls.log"
-TMPL="local:vztmpl/debian-13-standard_13.2-1_amd64.tar.zst"
+# Arch-bewusst: list zeigt, was im templates-Dir LIEGT (getrennt pro Arch),
+# available bietet das Host-Arch an (Live-Szenario ProxSmartHome: BEIDE Arches
+# liegen lokal, Installer muss per uname -m das richtige wählen).
+ARCH="x86_64"
+[[ -f "$HS/host_arch" ]] && ARCH=$(/bin/cat "$HS/host_arch")
+TAG="amd64"; [[ "$ARCH" == "aarch64" ]] && TAG="arm64"
 case "${1:-}" in
     list)
-        if [[ -f "$HS/template_downloaded" && ! -f "$HS/pveam_empty" ]]; then
-            echo "$TMPL  123456789"
-        fi
+        for f in "$HS"/templates/debian-13-standard*_"${TAG}".tar.zst; do
+            [[ -f "$f" ]] && echo "local:vztmpl/$(basename "$f")  123456789"
+        done
         exit 0 ;;
     available)
         if [[ ! -f "$HS/pveam_empty" ]]; then
-            echo "system          $TMPL  123456789"
+            echo "system          local:vztmpl/debian-13-standard_13.2-1_${TAG}.tar.zst  123456789"
         fi
         exit 0 ;;
     update)   exit 0 ;;
     download)
         mkdir -p "$HS/templates"
-        touch "$HS/templates/debian-13-standard_13.2-1_amd64.tar.zst"
-        touch "$HS/template_downloaded"
+        name="${3##*/}"
+        [[ -z "$name" ]] && name="debian-13-standard_13.2-1_${TAG}.tar.zst"
+        touch "$HS/templates/$name"
         exit 0 ;;
 esac
 exit 0
@@ -428,7 +453,7 @@ HS="${HARNESS_STATE:?}"
 if [[ -f "$HS/no_hostname_ip" ]]; then exit 0; fi
 IP=$(cat "$HS/ct_ip" 2>/dev/null || echo "10.120.5.42")
 if [[ "${1:-}" == "-I" ]]; then printf '%s 2601:db8::1 \n' "$IP"; exit 0; fi
-echo "pdm"; exit 0
+echo "kvmoink"; exit 0
 EOF
 
 cat > "$MK/mock-getent" <<'EOF'
@@ -478,6 +503,7 @@ reset_state() {
     echo "$CT_IP" > "$HS/ct_ip"
     : > "$HS/ct_list"
     echo "getent_mode=ok" > "$HS/getent_mode"
+    echo "x86_64" > "$HS/host_arch"
     printf 'PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nVERSION_CODENAME=trixie\nID=debian\n' > "$MK/etc/os-release"
 }
 run_installer() {
@@ -501,12 +527,12 @@ run_installer_devnull() {
 }
 seed_ct() { # laufender CT mit installiertem PDM
     reset_state
-    echo "200 running pdm" > "$HS/ct_list"
+    echo "200 running kvmoink" > "$HS/ct_list"
     echo "running" > "$HS/ct_200.status"
-    echo "pdm" > "$HS/ct_200.hostname"
+    echo "kvmoink" > "$HS/ct_200.hostname"
     mkdir -p "$MK/etc/apt/sources.list.d" "$MK/usr/lib/systemd/system" "$MK/usr/share/keyrings" "$MK/var/log" "$MK/root"
     seed_inner_tools
-    touch "$HS/pdm_installed" "$HS/template_downloaded"
+    touch "$HS/pdm_installed"
     touch "$HS/templates/debian-13-standard_13.2-1_amd64.tar.zst"
     touch "$MK/usr/lib/systemd/system/proxmox-datacenter-api.service" \
           "$MK/usr/lib/systemd/system/proxmox-datacenter-privileged-api.service"
@@ -566,19 +592,19 @@ reset_state
 printf '200 running foo\n201 running bar\n202 running baz\n' > "$HS/ct_list"
 ec=$(run_installer); assert_exit 0 "$ec"
 assert_out "Nächste freie CT-ID: 203"
-assert_fcontains "$HS/ct_203.create" "hostname pdm"
+assert_fcontains "$HS/ct_203.create" "hostname kvmoink"
 
 t "pct list ohne Lock-Spalte (Name \$NF)"
 reset_state
-printf '200 running pdm\n' > "$HS/ct_list"
+printf '200 running kvmoink\n' > "$HS/ct_list"
 ec=$(run_installer --status); assert_exit 0 "$ec"
-assert_out "Container:  200 (running) – pdm"
+assert_out "Container:  200 (running) – kvmoink"
 
 t "pct list mit doppeltem Leerzeichen (Lock leer)"
 reset_state
-printf '200 running  pdm\n' > "$HS/ct_list"
+printf '200 running  kvmoink\n' > "$HS/ct_list"
 ec=$(run_installer --status); assert_exit 0 "$ec"
-assert_out "Container:  200 (running) – pdm"
+assert_out "Container:  200 (running) – kvmoink"
 
 # ════════════════ B. Install Happy Path ════════════════
 t "Install End-to-End (nacktes Debian: curl bootstrappen, Keyring, Repo, Paket, Services)"
@@ -763,16 +789,46 @@ t "Template komplett fehlend → die"
 reset_state
 touch "$HS/pveam_empty"
 ec=$(run_installer); assert_exit 1 "$ec"
-assert_out "Kein debian-13-standard-Template gefunden"
+assert_out "Kein debian-13-standard-Template für amd64 gefunden"
 assert_out "Debian 13 (trixie)"
 rm -f "$HS/pveam_empty"
 
 t "Template-Download-Pfad (list leer, available da)"
 reset_state
+unseed_inner_tools
 ec=$(run_installer); assert_exit 0 "$ec"
-assert_out "Kein Debian-13-Template vorhanden – lade es herunter"
+assert_out "Kein Debian-13-amd64-Template vorhanden – lade es herunter"
 assert_calls 1 "pveam download local"
 assert_calls 1 "pct create 200"
+assert_fcontains "$HS/ct_200.create" "amd64"
+
+t "arm64-Host (ProxSmartHome-Klasse) → wählt arm64-Template (uname -m)"
+reset_state
+unseed_inner_tools
+echo "aarch64" > "$HS/host_arch"
+ec=$(run_installer); assert_exit 0 "$ec"
+assert_out "Host-Architektur: aarch64 → Template-Arch: arm64"
+assert_fcontains "$HS/ct_200.create" "debian-13-standard_13.2-1_arm64.tar.zst"
+assert_no_fcontains "$HS/ct_200.create" "amd64"
+
+t "nur arm64-Template lokal + amd64-Host → lädt amd64 nach (Live-Fund CT 212)"
+reset_state
+unseed_inner_tools
+mkdir -p "$HS/templates"
+touch "$HS/templates/debian-13-standard_13.2-1_arm64.tar.zst"
+ec=$(run_installer); assert_exit 0 "$ec"
+assert_out "Kein Debian-13-amd64-Template vorhanden – lade es herunter"
+assert_fcontains "$HS/ct_200.create" "amd64"
+assert_no_fcontains "$HS/ct_200.create" "arm64"
+
+t "Spawn-Fail mit Exit-0-Täuschung → klare Fehlermeldung (CT 212, Live-Fund 2026-11-19)"
+reset_state
+touch "$HS/spawn_fail"
+ec=$(run_installer); assert_exit 1 "$ec"
+assert_out "startet NICHT (Status nach pct create: stopped)"
+assert_out "falsches Template-Arch"
+assert_out "pct start"
+rm -f "$HS/spawn_fail"
 
 t "existierender CT ohne --force → die mit Update-Hinweis"
 seed_ct
@@ -815,7 +871,7 @@ assert_fcontains "$SOURCES_FILE" "Components: pdm-test"
 t "--update auf gestopptem CT → startet ihn selbst (Grube 10)"
 seed_ct
 echo "stopped" > "$HS/ct_200.status"
-/bin/sed -i "s/^200 .*/200 stopped pdm/" "$HS/ct_list"
+/bin/sed -i "s/^200 .*/200 stopped kvmoink/" "$HS/ct_list"
 ec=$(run_installer --update); assert_exit 0 "$ec"
 assert_calls 1 "pct start 200"
 assert_out "läuft nicht (Status: stopped) – starte ihn"
@@ -824,7 +880,7 @@ assert_out "Update abgeschlossen"
 t "--update ohne CT → die"
 reset_state
 ec=$(run_installer --update); assert_exit 1 "$ec"
-assert_out "Kein Container mit Hostname 'pdm' gefunden"
+assert_out "Kein Container mit Hostname 'kvmoink' gefunden"
 assert_out "Erst installieren"
 
 t "Host-Check tot → warn, update trotzdem exit 0"
@@ -883,7 +939,7 @@ assert_no_out "wieder vorhanden"
 t "--status: gestoppter CT"
 seed_ct
 echo "stopped" > "$HS/ct_200.status"
-/bin/sed -i "s/^200 .*/200 stopped pdm/" "$HS/ct_list"
+/bin/sed -i "s/^200 .*/200 stopped kvmoink/" "$HS/ct_list"
 ec=$(run_installer --status); assert_exit 0 "$ec"
 assert_out "nicht gestartet (stopped)"
 assert_out "pct start 200"
@@ -891,7 +947,7 @@ assert_out "pct start 200"
 t "--status: CT fehlt"
 reset_state
 ec=$(run_installer --status); assert_exit 0 "$ec"
-assert_out "Kein Container mit Hostname 'pdm' gefunden."
+assert_out "Kein Container mit Hostname 'kvmoink' gefunden."
 assert_out "Installieren:  bash -c"
 
 t "--status: Service tot → err-Zeile"

@@ -25,7 +25,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-Serv
 | Option | Default | Bedeutung |
 |---|---|---|
 | `--id ID` | nächste freie ab 200 | Container-ID |
-| `--hostname NAME` | `pdm` | Container-Hostname |
+| `--hostname NAME` | `kvmoink` | Container-Hostname |
 | `--rootfs GB` | 16 | Disk (Proxmox empfiehlt 40 für Produktion) |
 | `--cores N` | 2 | vCPUs |
 | `--memory MB` | 2048 | RAM (offizielles Minimum 2+ GB) |
@@ -66,10 +66,15 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-Serv
 
 ## Verifikation
 
-- Mock-Harness: **171/171 grün** (`bash harness/run.sh`) – E2E-Install gegen
+- Mock-Harness: **189/189 grün** (`bash harness/run.sh`) – E2E-Install gegen
   gemockte pct/pveam/apt/curl/systemctl-Umgebung, inkl. Bootstrap-Reihenfolge
   (nacktes Debian → curl via apt), Keyring-SHA256 mit den ECHTEN Keyring-Bytes,
   enterprise.sources-Entfernung, Update/Repo-Wechsel, DNS-Fallback, Fehlerpfade
+- **v1.0.1 Live-Fix (ProxSmartHome, CT 212):** Host hat beide Template-Arches
+  gespeichert und `sort -rV` wählt arm64 VOR amd64 (r>d) → lxc „Failed to spawn"
+  mit pct-Exit-0-Täuschung. Jetzt: Host-Arch via `uname -m` → Template explizit
+  nach amd64/arm64 gefiltert + nach `pct create` aktive Status-Verifikation
+  (`verify_ct_started`) statt blindes 60-s-IP-Timeout
 - ShellCheck: sauber (Installer + Harness)
 - PDM-Version im Repo-Index Stand 2026-11-18: **1.1.10** (pdm-test und
   pdm-no-subscription auf trixie)

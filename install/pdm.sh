@@ -30,7 +30,7 @@
 set -Eeuo pipefail
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-INSTALLER_VERSION="1.0.0"   # wird in --status/-Logs ausgegeben – hilft bei Fehlersuche
+INSTALLER_VERSION="1.0.1"   # wird in --status/-Logs ausgegeben – hilft bei Fehlersuche
 APP_NAME="pdm"
 PDM_SERVICES="proxmox-datacenter-api proxmox-datacenter-privileged-api"  # systemd-Units des Debs
 PDM_MAIN_PKG="proxmox-datacenter-manager"                # Version in --status angezeigt
@@ -43,7 +43,7 @@ UI_PORT=8443                # PDM-Web-GUI (HTTPS, fix – vom Daemon vorgegeben)
 PVE_PORT=8006               # nur für Hinweistexte (Remotes-Wizard)
 CT_ID=""                    # leer = automatisch nächste freie ID ab ID_SCAN_START
 ID_SCAN_START=200
-CT_HOSTNAME="pdm"
+CT_HOSTNAME="kvmoink"   # Phils Branding (war "pdm" in v1.0.0)
 CT_STORAGE="local-lvm"
 CT_ROOTFS=16                # GB – PDM-Dokumentation empfiehlt 40 für PROD; Home-Lab reicht 16
 CT_CORES=2
@@ -159,6 +159,29 @@ get_ct_ip() {
     fi
     pct exec "$ct_id" -- hostname -I 2>/dev/null | awk '{print $1}' || true
     return 0
+}
+
+verify_ct_started() {
+    # Live-Fund 2026-11-19 (CT 212, ProxSmartHome): pct create --start gibt
+    # Exit 0 zurück, AUCH wenn der Spawn knallt ("sync_wait ... Failed to
+    # spawn container"). Exit 0 heißt NICHT "läuft" – aktiv den Status
+    # verifizieren, bevor blind aufs Netzwerk gewartet wird.
+    local id="$1" tries=0 state=""
+    while true; do
+        state=$(pct status "$id" 2>/dev/null | awk '{print $2}' || true)
+        if [[ "$state" == "running" ]]; then
+            ok "Container $id läuft (Status nach pct create verifiziert)"
+            return 0
+        fi
+        tries=$((tries + 1))
+        if [[ $tries -ge 15 ]]; then
+            err "Container $id startet NICHT (Status nach pct create: ${state:-unbekannt})."
+            info "Häufigste Ursache: falsches Template-Arch (arm64/amd64) oder Storage-/Start-Probleme."
+            info "Prüfen: pct config $id | grep -E 'rootfs|arch'   |   pct start $id   (zeigt den Spawn-Fehler direkt)"
+            return 1
+        fi
+        sleep 1
+    done
 }
 
 wait_for_ct_network() {
@@ -313,7 +336,7 @@ Installation:   bash -c "$(wget -qLO - https://raw.githubusercontent.com/Hatchet
 
 Optionen (Befehl einfach fortsetzen, z. B.   ...pdm.sh)" --id 210   – OHNE weiteres Anführungszeichen):
   --id ID          Container-ID (Default: nächste freie ab 200)
-  --hostname NAME  Container-Hostname (Default: pdm)
+  --hostname NAME  Container-Hostname (Default: kvmoink)
   --storage NAME   Storage für rootfs (Default: local-lvm)
   --rootfs GB      Disk-Größe (Default: 16 – Proxmox empfiehlt 40 für Produktion)
   --cores N        vCPUs (Default: 2)
@@ -647,14 +670,26 @@ do_install() {
 
     # Debian-13-Template (PDM-Keyring/Repo braucht trixie – 12 hat kein PDM-Keyring)
     header "🧱 Container-Template"
+    # Arch-Filter (Live-Fund 2026-11-19, CT 212 auf ProxSmartHome): Der Host hat
+    # BEIDE Arch-Templates gespeichert, und `sort -rV` sortiert arm64 VOR amd64
+    # (r > d)! Falsches Arch → lxc "Failed to spawn" – pct create meldet trotzdem
+    # Exit 0 (Exit-0-Täuschung). Deshalb EXPLIZIT die Host-Architektur matchen.
+    local host_arch arch_tag
+    host_arch=$(uname -m 2>/dev/null || echo "x86_64")
+    case "$host_arch" in
+        x86_64)  arch_tag="amd64" ;;
+        aarch64) arch_tag="arm64" ;;
+        *) die "Unbekannte Host-Architektur '$host_arch' – kein passendes Debian-13-Template ableitbar." ;;
+    esac
+    info "Host-Architektur: $host_arch → Template-Arch: $arch_tag"
     local template=""
-    template=$(pveam list local 2>/dev/null | awk '{print $1}' | grep -o 'debian-13-standard[^ ]*' | sort -rV | head -1 || true)
+    template=$(pveam list local 2>/dev/null | awk '{print $1}' | grep -o "debian-13-standard[^ ]*_${arch_tag}\.tar\.zst" | sort -rV | head -1 || true)
     if [[ -z "$template" ]]; then
-        info "Kein Debian-13-Template vorhanden – lade es herunter ..."
+        info "Kein Debian-13-${arch_tag}-Template vorhanden – lade es herunter ..."
         pveam update
-        template=$(pveam available --section system 2>/dev/null | grep -o 'debian-13-standard[^ ]*' | sort -rV | head -1 || true)
+        template=$(pveam available --section system 2>/dev/null | grep -o "debian-13-standard[^ ]*_${arch_tag}\.tar\.zst" | sort -rV | head -1 || true)
         if [[ -z "$template" ]]; then
-            die "Kein debian-13-standard-Template gefunden (pveam available leer?).\n  PDM braucht Debian 13 (trixie) – Debian-12-Container werden nicht unterstützt."
+            die "Kein debian-13-standard-Template für ${arch_tag} gefunden (pveam available leer?).\n  PDM braucht Debian 13 (trixie) – Debian-12-Container werden nicht unterstützt."
         fi
         pveam download local "$template"
     fi
@@ -708,7 +743,8 @@ do_install() {
         --start 1 \
         --password "$CT_PASSWORD" \
         "${ssh_keys_args[@]}"
-    ok "Container $CT_ID erstellt und gestartet"
+    ok "Container $CT_ID erstellt"
+    verify_ct_started "$CT_ID"
 
     wait_for_ct_network "$CT_ID"
     verify_ct_dns "$CT_ID"
