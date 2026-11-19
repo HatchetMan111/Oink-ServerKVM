@@ -16,10 +16,10 @@
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)"
 ```
 
-Optionen (direkt hinter dem schließenden Anführungszeichen anhängen):
+Optionen (Befehl einfach fortsetzen — **ohne** weiteres Anführungszeichen):
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)" " --id 210 --memory 4096
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)" --id 210 --memory 4096
 ```
 
 | Option | Default | Bedeutung |

@@ -547,6 +547,20 @@ ec=$( unshare -rm env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" HARNESS_S
 assert_exit 0 "$ec"
 assert_out "Status PDM"
 
+t "\$0-Fallback Copy-Paste-Falle: \" --status (überzähliges Anführungszeichen → \$0 mit Leerzeichen)"
+ec=$( unshare -rm env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" HARNESS_STATE="$HS" HOME=/root TERM=dumb LANG=C.UTF-8 \
+      bash -c "$(<"$SCRIPT")" " --status" > "$CUR_DIR/out.log" 2>&1; echo $? )
+assert_exit 0 "$ec"
+assert_out "Status PDM"
+
+t "\$0-Fallback Copy-Paste-Falle: \" --id 210 → Option wird erkannt (Live-Bug 2026-11-19)"
+reset_state
+ec=$( unshare -rm env -i PATH="$HOSTBIN:/usr/sbin:/usr/bin:/sbin:/bin" HARNESS_STATE="$HS" HOME=/root TERM=dumb LANG=C.UTF-8 \
+      bash -c "$(<"$SCRIPT")" " --id 210" > "$CUR_DIR/out.log" 2>&1; echo $? )
+assert_exit 0 "$ec"
+assert_out "Erzeuge Container 210"
+assert_calls 1 "pct create 210"
+
 t "nächste freie CT-ID (200-202 belegt)"
 reset_state
 printf '200 running foo\n201 running bar\n202 running baz\n' > "$HS/ct_list"

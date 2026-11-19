@@ -19,8 +19,9 @@
 #  Installation (auf dem Proxmox-Host als root):
 #    bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)"
 #
-#  Mit Optionen (direkt hinter dem schließenden Anführungszeichen):
-#    ... " --id 210 --memory 4096
+#  Mit Optionen (Befehl einfach fortsetzen – NACH dem schließenden
+#  Anführungszeichen, OHNE weiteres Anführungszeichen):
+#    bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)" --id 210 --memory 4096
 #
 #  Update / Deinstall / Status / Debug:
 #    ... " --update        |  ... " --uninstall  |  ... " --status  |  ... " --debug
@@ -254,10 +255,18 @@ ensure_ct_running() {
 parse_args() {
     # Grube (bash -c): `bash -c "$(wget -qLO - URL)" --id 5` belegt das ERSTE
     # Argument nach dem Script-String mit $0, nicht $1 – die Option würde
-    # still geschluckt. Fallback: startet $0 mit "-", ist es eine Option.
+    # still geschluckt. Fallback: startet $0 mit "-" oder Leerzeichen, wird es
+    # als Optionsliste gewertet und TOKENWEISE gesplittet. Das fängt auch den
+    # Copy-Paste-Klassiker `...)" " --id 210` ab (überzähliges/zu wenig
+    # geschlossenes Anführungszeichen → bash hängt am Fortsetzungs-Prompt und
+    # $0 landet als " --id 210"): die Optionen werden sauber herausgelesen.
     local args=("$@")
-    if [[ "$0" == -* ]]; then
-        args=("$0" "$@")
+    if [[ "$0" == -* || "$0" == [[:space:]]* ]]; then
+        local zero_args=()
+        read -r -a zero_args <<< "$0" || true
+        if [[ ${#zero_args[@]} -gt 0 ]]; then
+            args=("${zero_args[@]}" "$@")
+        fi
     fi
     local i=0
     while [[ $i -lt ${#args[@]} ]]; do
@@ -302,7 +311,7 @@ print_help() {
 
 Installation:   bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/Oink-ServerKVM/main/install/pdm.sh)"
 
-Optionen (hinter dem schließenden Anführungszeichen anhängen, z. B. ... " --id 210):
+Optionen (Befehl einfach fortsetzen, z. B.   ...pdm.sh)" --id 210   – OHNE weiteres Anführungszeichen):
   --id ID          Container-ID (Default: nächste freie ab 200)
   --hostname NAME  Container-Hostname (Default: pdm)
   --storage NAME   Storage für rootfs (Default: local-lvm)
